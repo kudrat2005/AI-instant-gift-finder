@@ -1,0 +1,62 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+:root {
+  --amber-50: #faeeda;
+  --amber-100: #fac775;
+  --amber-400: #ef9f27;
+  --amber-600: #ba7517;
+  --amber-800: #854f0b;
+  --amber-900: #633806;
+
+  --gray-50: #f7f6f2;
+  --gray-100: #edecea;
+  --gray-200: #d3d1c7;
+  --gray-500: #888780;
+  --gray-800: #2c2c2a;
+  --gray-900: #1a1a18;
+
+  --blue-600: #185fa5;
+  --blue-50: #e6f1fb;
+
+  --red-50: #fcebeb;
+  --red-600: #a32d2d;
+  --red-text: #791f1f;
+
+  --font-display: "Playfair Display", Georgia, serif;
+  --font-body: "DM Sans", system-ui, sans-serif;
+
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+}
+
+body {
+  font-family: var(--font-body);
+  background: var(--gray-50);
+  color: var(--gray-800);
+  min-height: 100vh;
+  line-height: 1.6;
+}
+
+a {
+  color: var(--blue-600);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+input,
+select,
+textarea,
+button {
+  font-family: var(--font-body);
+}
