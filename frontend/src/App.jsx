@@ -40,7 +40,14 @@ export default function App() {
 
     setLoading(true);
     try {
-      const { data } = await axios.post("/api/generate-gifts", form);
+      const API_URL =
+  import.meta.env.VITE_API_URL ||
+  "https://ai-instant-gift-finder-1.onrender.com";
+
+const { data } = await axios.post(
+  `${API_URL}/api/generate-gifts`,
+  form
+);
       setResults(data);
     } catch (err) {
       const msg =
