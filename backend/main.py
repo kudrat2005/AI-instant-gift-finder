@@ -1,51 +1,71 @@
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional
-from groq import Groq          # 👈 swap to: from openai import OpenAI
+from groq import (
+    Groq,
+    APIConnectionError,
+    APIStatusError,
+    AuthenticationError,
+    RateLimitError,
+)
+from urllib.parse import quote_plus
+from dotenv import load_dotenv
 import json
 import os
-from dotenv import load_dotenv
 
 load_dotenv()
 
-app = FastAPI(title="AI Gift Finder API", version="1.0.0")
+app = FastAPI(
+    title="AI Gift Finder API",
+    version="1.0.0",
+)
 
+# CORS configuration for React
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-client = Groq(api_key=os.getenv("GROQ_API_KEY"))   # 👈 swap to OpenAI(...) if needed
+# Initialize Groq client
+api_key = os.getenv("GROQ_API_KEY")
+client = Groq(api_key=api_key) if api_key else None
 
-SYSTEM_PROMPT = """You are an intelligent gifting assistant specializing in personalized, creative, and meaningful gift recommendations.
+SYSTEM_PROMPT = """
+You are an intelligent gifting assistant specializing in personalized,
+creative, and meaningful gift recommendations.
 
-Given user input as JSON, generate 6–8 highly personalized gift suggestions.
+Generate 6-8 personalized gift suggestions based on the user's input.
 
 Rules:
-- Analyze the description deeply for personality, hobbies, and preferences
-- If social media IDs are provided, infer general interest themes (do NOT access private data)
-- Suggestions must be relevant to the occasion, within budget, and relationship-appropriate
-- Prioritize creativity and usefulness over generic gifts
-- Budget is in Indian Rupees (₹)
-- For the "search_query" field, generate a short 3–6 word search string (NOT a full URL)
+- Analyze personality, hobbies, and preferences.
+- Treat social media IDs only as user-provided hints.
+- Never claim to access private social media data.
+- Match the occasion, relationship, and budget.
+- Budget is in Indian Rupees (INR).
+- Generate a short 3-6 word product search phrase.
 
-Return ONLY valid JSON with no markdown fences, no preamble, no explanation:
+Return ONLY valid JSON without Markdown fences, in this format:
 {
   "occasion": "string",
   "relationship": "string",
   "gift_suggestions": [
     {
       "title": "Gift Name",
-      "reason": "Why this gift is suitable (1–2 sentences)",
+      "reason": "Why this gift is suitable",
       "price_range": "₹XXX–₹XXX",
-      "search_query": "short search query for the gift"
+      "search_query": "short product search query"
     }
   ]
-}"""
+}
+"""
 
 
 class GiftRequest(BaseModel):
@@ -73,57 +93,176 @@ class GiftResponse(BaseModel):
     gift_suggestions: list[GiftSuggestion]
 
 
+# Build shopping search links
 PLATFORM_URL_BUILDERS = {
-    "Amazon":   lambda q: f"https://www.amazon.in/s?k={q.replace(' ', '+')}",
-    "Flipkart": lambda q: f"https://www.flipkart.com/search?q={q.replace(' ', '+')}",
-    "Etsy":     lambda q: f"https://www.etsy.com/search?q={q.replace(' ', '+')}",
-    "Other":    lambda q: f"https://www.amazon.in/s?k={q.replace(' ', '+')}",
+    "Amazon": lambda q: (
+        f"https://www.amazon.in/s?k={quote_plus(q)}"
+    ),
+    "Flipkart": lambda q: (
+        f"https://www.flipkart.com/search?q={quote_plus(q)}"
+    ),
+    "Etsy": lambda q: (
+        f"https://www.etsy.com/search?q={quote_plus(q)}"
+    ),
+    "Other": lambda q: (
+        f"https://www.amazon.in/s?k={quote_plus(q)}"
+    ),
 }
 
 
 @app.post("/api/generate-gifts", response_model=GiftResponse)
 async def generate_gifts(req: GiftRequest):
+
+    if client is None:
+        raise HTTPException(
+            status_code=500,
+            detail="GROQ_API_KEY is missing. Configure it in your environment.",
+        )
+
     try:
         response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            max_tokens=1500,
+            model="openai/gpt-oss-120b",
+            max_tokens=2500,
+            temperature=0.7,
             messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {"role": "user", "content": req.model_dump_json()}
-            ]
+                {
+                    "role": "system",
+                    "content": SYSTEM_PROMPT,
+                },
+                {
+                    "role": "user",
+                    "content": req.model_dump_json(),
+                },
+            ],
         )
-        raw = response.choices[0].message.content.strip()
+
+        raw = response.choices[0].message.content
+
+        if not raw:
+            raise HTTPException(
+                status_code=502,
+                detail="The AI returned an empty response. Please try again.",
+            )
+
+        # Remove accidental Markdown fences
+        raw = raw.strip()
+
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[-1]
+
+            if raw.endswith("```"):
+                raw = raw[:-3].strip()
+
+        # Parse the AI response
         parsed = json.loads(raw)
 
-        link_builder = PLATFORM_URL_BUILDERS.get(req.preferred_platform, PLATFORM_URL_BUILDERS["Amazon"])
+        if not isinstance(parsed, dict):
+            raise HTTPException(
+                status_code=502,
+                detail="The AI returned an invalid response.",
+            )
 
-        suggestions = []
-        for g in parsed.get("gift_suggestions", []):
-            suggestions.append(GiftSuggestion(
-                title=g["title"],
-                reason=g["reason"],
-                price_range=g["price_range"],
-                search_query=g["search_query"],
-                link=link_builder(g["search_query"])
-            ))
+        if not isinstance(parsed.get("gift_suggestions"), list):
+            raise HTTPException(
+                status_code=502,
+                detail="The AI returned an invalid gift suggestions format.",
+            )
 
-        return GiftResponse(
-            occasion=parsed.get("occasion", req.occasion),
-            relationship=parsed.get("relationship", req.relationship),
-            platform=req.preferred_platform,
-            gift_suggestions=suggestions
+        # Select shopping platform
+        platform = req.preferred_platform
+        link_builder = PLATFORM_URL_BUILDERS.get(
+            platform,
+            PLATFORM_URL_BUILDERS["Amazon"],
         )
 
-    except json.JSONDecodeError as e:
-        raise HTTPException(status_code=500, detail=f"Failed to parse AI response as JSON: {str(e)}")
-    except anthropic.APIConnectionError:
-        raise HTTPException(status_code=503, detail="Could not connect to Anthropic API.")
-    except anthropic.AuthenticationError:
-        raise HTTPException(status_code=401, detail="Invalid Anthropic API key. Check your .env file.")
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        suggestions = []
+
+        for gift in parsed["gift_suggestions"]:
+            if not isinstance(gift, dict):
+                continue
+
+            title = gift.get("title")
+            reason = gift.get("reason")
+            price_range = gift.get("price_range")
+            search_query = gift.get("search_query")
+
+            if not all(
+                isinstance(value, str) and value.strip()
+                for value in [
+                    title,
+                    reason,
+                    price_range,
+                    search_query,
+                ]
+            ):
+                continue
+
+            suggestions.append(
+                GiftSuggestion(
+                    title=title.strip(),
+                    reason=reason.strip(),
+                    price_range=price_range.strip(),
+                    search_query=search_query.strip(),
+                    link=link_builder(search_query.strip()),
+                )
+            )
+
+        if not suggestions:
+            raise HTTPException(
+                status_code=502,
+                detail="No valid gift suggestions were returned. Please try again.",
+            )
+
+        return GiftResponse(
+            occasion=parsed.get("occasion") or req.occasion,
+            relationship=parsed.get("relationship") or req.relationship,
+            platform=platform,
+            gift_suggestions=suggestions,
+        )
+
+    except HTTPException:
+        raise
+
+    except json.JSONDecodeError:
+        raise HTTPException(
+            status_code=502,
+            detail="Could not parse the AI response. Please try again.",
+        )
+
+    except AuthenticationError:
+        raise HTTPException(
+            status_code=401,
+            detail="Groq authentication failed. Check your GROQ_API_KEY.",
+        )
+
+    except RateLimitError:
+        raise HTTPException(
+            status_code=429,
+            detail="Groq rate limit reached. Please try again later.",
+        )
+
+    except APIConnectionError:
+        raise HTTPException(
+            status_code=503,
+            detail="Could not connect to Groq. Please try again.",
+        )
+
+    except APIStatusError as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Groq API request failed with status {e.status_code}.",
+        )
+
+    except Exception:
+        raise HTTPException(
+            status_code=500,
+            detail="An unexpected error occurred while generating gifts.",
+        )
 
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "AI Gift Finder"}
+    return {
+        "status": "ok",
+        "service": "AI Gift Finder",
+    }
