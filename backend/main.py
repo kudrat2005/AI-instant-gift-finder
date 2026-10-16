@@ -23,18 +23,20 @@ app = FastAPI(
 )
 
 # CORS configuration for React
+
 app.add_middleware(
     CORSMiddleware,
-   allow_origins=[
-    "http://localhost:5173",
-    "http://localhost:3000",
-    "https://ai-instant-gift-finder.vercel.app",
-    "https://ai-instant-gift-finder-jfzq8tdug-kudrat2.vercel.app",
-],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "https://ai-instant-gift-finder.vercel.app",
+        "https://ai-instant-gift-finder-jfzq8tdug-kudrat2.vercel.app",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Initialize Groq client
 api_key = os.getenv("GROQ_API_KEY")
